@@ -34,7 +34,9 @@ param(
     # 已有本地資料夾，跳過下載
     [switch]$NoDownload,
     # 每次都重新拉最新的 llama.cpp 轉檔腳本
-    [switch]$UpdateLlamaCpp
+    [switch]$UpdateLlamaCpp,
+    # 強制排除 MTP 頭（未指定時會自動偵測 config 與權重是否一致）
+    [switch]$NoMtp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -152,13 +154,55 @@ if ($NoDownload) {
 $SrcGB = DirGB $Src
 Info "本地來源大小：$SrcGB GB"
 
+# ---------- 3.5 MTP 完整性檢查 ----------
+# 有些 abliterated / finetune 權重把 MTP 頭拿掉了，卻沒改 config 裡的
+# mtp_num_hidden_layers。轉檔器據此把 block_count 加一，寫出宣告 41 塊、
+# 實際只有 40 塊的 GGUF，載入時就會報 missing tensor 'blk.<N>.attn_norm.weight'。
+$MtpArg = @()
+if ($NoMtp) {
+    Warn '依 -NoMtp 排除 MTP 頭'
+    $MtpArg = @('--no-mtp')
+} else {
+    try {
+        $cfgPath = Join-Path $Src 'config.json'
+        if (Test-Path $cfgPath) {
+            $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
+            $declared = 0
+            foreach ($node in @($cfg, $cfg.text_config)) {
+                if ($node -and $node.PSObject.Properties.Name -contains 'mtp_num_hidden_layers') {
+                    $declared = [int]$node.mtp_num_hidden_layers
+                }
+                if ($node -and $node.PSObject.Properties.Name -contains 'num_nextn_predict_layers') {
+                    $declared = [int]$node.num_nextn_predict_layers
+                }
+            }
+            if ($declared -gt 0) {
+                $idxPath = Join-Path $Src 'model.safetensors.index.json'
+                $present = $true
+                if (Test-Path $idxPath) {
+                    $keys = (Get-Content $idxPath -Raw | ConvertFrom-Json).weight_map.PSObject.Properties.Name
+                    $present = [bool]($keys | Where-Object { $_ -match '(^|\.)(mtp|nextn)\.' })
+                }
+                if (-not $present) {
+                    Warn "config 宣告 MTP 層 x$declared，但權重裡找不到對應 tensor —— 自動加上 --no-mtp"
+                    $MtpArg = @('--no-mtp')
+                } else {
+                    Info "MTP 層 x$declared，權重齊全"
+                }
+            }
+        }
+    } catch {
+        Warn "MTP 檢查略過：$($_.Exception.Message)"
+    }
+}
+
 # ---------- 4. bf16 母帶 ----------
 # 任何量化都要先有 bf16 當輸入，所以無論如何都會產生
 Step '轉換 -> bf16 GGUF'
 if (Test-Path $Bf16) {
     Info "已存在，略過：$(Split-Path -Leaf $Bf16)（$(GB (Get-Item $Bf16).Length) GB）"
 } else {
-    & $Py (Join-Path $Work 'convert_hf_to_gguf.py') $Src --outtype bf16 --outfile $Bf16
+    & $Py (Join-Path $Work 'convert_hf_to_gguf.py') $Src @MtpArg --outtype bf16 --outfile $Bf16
     if ($LASTEXITCODE -ne 0) { throw 'bf16 轉換失敗' }
 }
 

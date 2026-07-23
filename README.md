@@ -134,6 +134,25 @@ llama.cpp 的 `requirements-convert_legacy_llama.txt` 把 numpy 釘在 `~=1.26.4
 Get-ChildItem "C:\models\venv\Lib\site-packages" -Filter "~*" -Directory | Remove-Item -Recurse -Force
 ```
 
+**載入時 `missing tensor 'blk.<N>.attn_norm.weight'`**
+不是 llama.cpp 版本太舊，是**權重本身缺 MTP 頭**。部分 abliterated／finetune 模型把 MTP（multi-token prediction）模組拿掉了，卻沒把 `config.json` 裡的 `mtp_num_hidden_layers` 改回 0。轉檔器照宣告把 `block_count` 加一，寫出「宣告 41 塊、實際只有 40 塊」的 GGUF，載入時就在最後一塊撲空。
+
+腳本會自動比對 config 宣告與權重索引，不一致時自動加上 `--no-mtp`。手動轉檔的話自己補這個旗標：
+
+```bash
+python3 convert_hf_to_gguf.py <模型目錄> --no-mtp --outtype bf16 --outfile out-bf16.gguf
+```
+
+MTP 只是推測解碼用的加速頭，llama.cpp 目前沒有實際拿它加速，排除掉不影響輸出品質。
+
+判斷是不是這個問題，看 config 宣告與權重是否對得上：
+
+```bash
+python3 -c "import json;c=json.load(open('config.json'));t=c.get('text_config',c);print('declared:',t.get('mtp_num_hidden_layers',0));print('present:',any('mtp.' in k for k in json.load(open('model.safetensors.index.json'))['weight_map']))"
+```
+
+`declared` 大於 0 而 `present` 為 `False`，就是這個狀況。
+
 **`沒有 vision tower，或此架構不支援 mmproj`**
 純文字模型的正常訊息，不影響後續步驟。若模型確實是 VLM 但轉不出來，可從同模型的官方 GGUF repo 借用 —— 視覺塔通常未被微調改動：
 

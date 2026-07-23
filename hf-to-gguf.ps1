@@ -215,6 +215,12 @@ if (Test-Path $Mmp) {
     if ($LASTEXITCODE -ne 0) {
         Warn '沒有 vision tower，或此架構不支援 mmproj —— 純文字模型屬正常，不影響後續。'
         Remove-Item $Mmp -Force -EA SilentlyContinue
+    } elseif ((Test-Path $Mmp) -and ((Get-Item $Mmp).Length -lt 10MB)) {
+        # 部分 abliterated 權重砍掉了視覺塔，卻留著 config 裡的 vision_config，
+        # 轉檔會「成功」但只寫出幾 KB 的空殼。
+        Warn "mmproj 只有 $((Get-Item $Mmp).Length) bytes，視覺塔權重不存在 —— 刪除空殼檔。"
+        Warn '此模型視為純文字。要視覺功能請從原版 repo 借 mmproj，或改用未 abliterate 的版本。'
+        Remove-Item $Mmp -Force
     }
 }
 

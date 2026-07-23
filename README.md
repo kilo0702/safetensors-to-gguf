@@ -153,8 +153,17 @@ python3 -c "import json;c=json.load(open('config.json'));t=c.get('text_config',c
 
 `declared` 大於 0 而 `present` 為 `False`，就是這個狀況。
 
+**mmproj 只有幾 KB**
+那是空殼，不是正常檔案。部分 abliterated 模型把視覺塔整個移除了，卻留著 `config.json` 裡的 `vision_config`，轉檔於是「成功」但寫不出任何權重。腳本會偵測並自動刪除（門檻 10 MB）。確認方式是看權重索引裡有沒有視覺 tensor：
+
+```bash
+python3 -c "import json;k=json.load(open('model.safetensors.index.json'))['weight_map'];print('vision tensors:',sum('visual' in x or 'vision' in x for x in k))"
+```
+
+結果是 0，這份權重就是純文字模型，config 裡的 `language_model_only: true` 也是同一件事的另一種說法。
+
 **`沒有 vision tower，或此架構不支援 mmproj`**
-純文字模型的正常訊息，不影響後續步驟。若模型確實是 VLM 但轉不出來，可從同模型的官方 GGUF repo 借用 —— 視覺塔通常未被微調改動：
+純文字模型的正常訊息，不影響後續步驟。若模型確實是 VLM 但轉不出來，或如上被砍掉了視覺塔，可從同模型的官方 GGUF repo 借用 —— 視覺塔通常未被微調改動，投影維度也對得上：
 
 ```powershell
 C:\models\venv\Scripts\hf.exe download <org>/<model>-GGUF --include "mmproj*" --local-dir C:\models\gguf
